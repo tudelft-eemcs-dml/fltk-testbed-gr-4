@@ -7,6 +7,7 @@ import json
 import yaml
 
 from fltk.nets import Cifar10CNN, FashionMNISTCNN, Cifar100ResNet, FashionMNISTResNet, Cifar10ResNet, Cifar100VGG
+from fltk.FedEX import FedEX
 
 SEED = 1
 torch.manual_seed(SEED)
@@ -16,7 +17,8 @@ class Arguments:
     def __init__(self, logger):
         self.logger = logger
 
-        self.batch_size = 10 # Initial value: 10
+        # self.batch_size = 10 # Initial value: 10
+        self.batch_size = FedEX()
         self.test_batch_size = 1000
         self.epochs = 1
         self.lr = 0.001
