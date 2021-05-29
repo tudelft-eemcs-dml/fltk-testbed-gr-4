@@ -13,7 +13,7 @@ tensor_board_active: true
 clients_per_round: 1
 system:
   federator:
-    hostname: '131.180.40.72'
-    nic: 'ens4'
+    hostname: '172.24.225.208'
+    nic: 'eth0'
   clients:
     amount: 1

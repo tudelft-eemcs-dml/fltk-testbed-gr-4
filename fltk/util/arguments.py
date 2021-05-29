@@ -16,7 +16,7 @@ class Arguments:
     def __init__(self, logger):
         self.logger = logger
 
-        self.batch_size = 10
+        self.batch_size = 10 # Initial value: 10
         self.test_batch_size = 1000
         self.epochs = 1
         self.lr = 0.001
