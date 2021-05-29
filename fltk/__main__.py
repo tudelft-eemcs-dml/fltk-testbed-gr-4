@@ -10,14 +10,8 @@ import torch.multiprocessing as mp
 from fltk.federator import Federator
 from fltk.launch import run_single, run_spawn
 from fltk.util.base_config import BareConfig
-from fltk.FedEX import FedEX
 
 logging.basicConfig(level=logging.DEBUG)
-
-# Update hyperparameters using FedEX algorithm
-def update_param(cfg):
-    new_batch_size = FedEX()
-    cfg.batch_size = new_batch_size
 
 def main():
     parser = argparse.ArgumentParser(description='Experiment launcher for the Federated Learning Testbed')
@@ -31,8 +25,6 @@ def main():
     args = parser.parse_args()
     with open(args.config) as file:
         cfg = BareConfig()
-        update_param(cfg) # Hyperparameter tuning
-        print(f'Current batch size: {cfg.batch_size}') # Test if parameter is updated
         yaml_data = yaml.load(file, Loader=yaml.FullLoader)
         cfg.merge_yaml(yaml_data)
         if args.mode == 'single':
