@@ -19,7 +19,7 @@ class Arguments:
 
         self.batch_sizes = [8, 16, 32, 64, 128]
         self.dist = [0.2, 0.2, 0.2, 0.2, 0.2] # Initial distribution
-        self.batch_size = choose_from_dist(self.dist, self.batch_sizes)
+        # self.batch_size = choose_from_dist(self.dist, self.batch_sizes)
         self.test_batch_size = 1000
         self.epochs = 1
         self.lr = 0.001

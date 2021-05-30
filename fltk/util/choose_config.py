@@ -16,7 +16,7 @@ def choose_from_dist(dist, configs):
 
 if __name__ == "__main__":
     dist = [0.2, 0.3, 0.1, 0.25, 0.15]
-    configs = [8, 16, 32, 64, 128]
+    configs = [10, 16, 32, 64, 128]
     for i in range(10):
         config = choose_from_dist(dist, configs)
         print(f"Sample {i+1}: {config}")
