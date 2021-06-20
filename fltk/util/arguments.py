@@ -1,12 +1,13 @@
 import torch.nn.functional as F
-
 import torch
 import json
+from fltk.util.update_dist import cal_dist_entropy
 
 # Setting the seed for Torch
 import yaml
 
 from fltk.nets import Cifar10CNN, FashionMNISTCNN, Cifar100ResNet, FashionMNISTResNet, Cifar10ResNet, Cifar100VGG
+from fltk.util.choose_config import setup_configs
 
 SEED = 1
 torch.manual_seed(SEED)
@@ -22,14 +23,34 @@ class Arguments:
         self.lr = 0.001
         self.momentum = 0.9
         self.cuda = False
-        self.shuffle = False
+        self.shuffle = True
         self.log_interval = 10
         self.kwargs = {}
         self.contribution_measurement_round = 1
         self.contribution_measurement_metric = 'Influence'
 
+        # Hyperparameters we are tuning
+        self.batch_sizes = [10, 16, 32, 64, 128]
+        self.learning_rates = [0.00001, 0.0001, 0.001, 0.01]  # Client learning rate
+        self.momentums = [0.6, 0.7, 0.8, 0.9]
+        self.dropouts = [0.0, 0.5]
+
+        # The distribution related parameters
+        self.hyperparamconfigs = [self.batch_sizes, self.learning_rates, self.momentums, self.dropouts]
+        self.dist = []   
+        self.configs = []
+        self.currentconfig = []
+
+        self.build_configs()                     # Group hyperparameters into configurations, build an uniform distribution
+
+        # Other newly added parameters
+        self.server_lr = 1                       # Federator learning rate
+        self.server_gamma = 1 - pow(10, -2)      # Parameter for decreasing server learning rate
+        self.entropy = cal_dist_entropy(self.dist) # Entropy of the distribution
+        self.entropy_threshold = 4.5            # Threshold in the paper is 0.0001
+
         self.scheduler_step_size = 50
-        self.scheduler_gamma = 0.5
+        self.scheduler_gamma = 1                 # No decay for client learning rate
         self.min_lr = 1e-10
 
         self.round_worker_selection_strategy = None
@@ -59,13 +80,13 @@ class Arguments:
 
         }
         self.net = None
-        self.set_net_by_name('Cifar10CNN')
+        self.set_net_by_name('FashionMNISTCNN')
         # self.net = FashionMNISTCNN
         # self.net = Cifar100ResNet
         # self.net = FashionMNISTResNet
         # self.net = Cifar10ResNet
         # self.net = Cifar10ResNet
-        self.dataset_name = 'cifar10'
+        self.dataset_name = 'fashion-mnist'
         self.train_data_loader_pickle_path = {
             'cifar10': 'data_loaders/cifar10/train_data_loader.pickle',
             'fashion-mnist': 'data_loaders/fashion-mnist/train_data_loader.pickle',
@@ -256,6 +277,14 @@ class Arguments:
 
         if epoch_idx == 1 or epoch_idx % self.save_epoch_interval == 0:
             return True
+
+    def build_configs(self):
+        dist = []
+        configs = []
+        for c in self.hyperparamconfigs :
+            dist, configs = setup_configs(dist, configs, c)
+        self.dist = dist
+        self.configs = configs
 
     def log(self):
         """

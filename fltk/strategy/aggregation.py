@@ -13,6 +13,7 @@ def average_nn_parameters(parameters):
 
     return new_params
 
+# sizes: the size of traning data for each client
 def fed_average_nn_parameters(parameters, sizes):
     new_params = {}
     sum_size = 0

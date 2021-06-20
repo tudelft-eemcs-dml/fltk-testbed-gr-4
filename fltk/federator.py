@@ -1,4 +1,6 @@
 import datetime
+from distutils.command.config import config
+from math import dist
 import time
 from typing import List
 
@@ -12,7 +14,7 @@ from fltk.util.arguments import Arguments
 from fltk.util.base_config import BareConfig
 from fltk.util.data_loader_utils import load_train_data_loader, load_test_data_loader, \
     generate_data_loaders_from_distributed_dataset
-from fltk.util.fed_avg import average_nn_parameters
+from fltk.util.fed_avg import fed_average_nn_parameters
 from fltk.util.log import FLLogger
 from torchsummary import summary
 from torch.utils.tensorboard import SummaryWriter
@@ -21,12 +23,12 @@ import logging
 
 from fltk.util.results import EpochData
 from fltk.util.tensor_converter import convert_distributed_data_into_numpy
+from fltk.util.update_dist import update_dist, cal_dist_entropy
 
 logging.basicConfig(level=logging.DEBUG)
 
 def _call_method(method, rref, *args, **kwargs):
     return method(rref.local_value(), *args, **kwargs)
-
 
 def _remote_method(method, rref, *args, **kwargs):
     args = [method, rref] + list(args)
@@ -66,6 +68,11 @@ class Federator:
     clients: List[ClientRef] = []
     epoch_counter = 0
     client_data = {}
+    previous_weights = {}
+    comm_round = 0
+    entropies = []              # Entropy of the distribution of configurations
+    max_grads = []              # Maximum gradients of the distribution in every round
+    dist_lr_type = "aggressive" # Three types: "constant", "adaptive" and "aggressive"
 
     def __init__(self, client_id_triple, num_epochs = 3, config=None):
         log_rref = rpc.RRef(FLLogger())
@@ -131,15 +138,36 @@ class Federator:
     def remote_run_epoch(self, epochs):
         responses = []
         client_weights = []
+        chosen_configs = []
+        losses = []
+        test_datasizes = []
+        train_datasizes = []
         selected_clients = self.select_clients(self.config.clients_per_round)
         for client in selected_clients:
             responses.append((client, _remote_method_async(Client.run_epochs, client.ref, num_epoch=epochs)))
         self.epoch_counter += epochs
+        self.comm_round += 1
         for res in responses:
             epoch_data, weights = res[1].wait()
+
+            # Receive index of chosen configuration in distribution.
+            numberchosen = epoch_data.chosen_config_index
+            chosenconfig = self.config.configs[numberchosen]
+            batch_size = chosenconfig[0]
+            lr = chosenconfig[1]
+            momentum = chosenconfig[2]
+            dropouts = chosenconfig[3]
+            chosen_configs.append(chosenconfig)
+            
+            losses.append(epoch_data.loss)
+            test_datasizes.append(epoch_data.test_datasize)
+            train_datasizes.append(epoch_data.batch_size)
             self.client_data[epoch_data.client_id].append(epoch_data)
-            logging.info(f'{res[0]} had a loss of {epoch_data.loss}')
-            logging.info(f'{res[0]} had a epoch data of {epoch_data}')
+            # logging.info(f'{res[0]} had a batch size of {batch_size}')
+            # logging.info(f'{res[0]} had a learning rate of {lr}')
+            # logging.info(f'{res[0]} had a test data size of {epoch_data.test_datasize}')
+            # logging.info(f'{res[0]} had a loss of {epoch_data.loss}')
+            # logging.info(f'{res[0]} had a epoch data of {epoch_data}')
 
             res[0].tb_writer.add_scalar('training loss',
                                         epoch_data.loss_train,  # for every 1000 minibatches
@@ -150,16 +178,47 @@ class Federator:
                                         self.epoch_counter * res[0].data_size)
 
             client_weights.append(weights)
-        updated_model = average_nn_parameters(client_weights)
+        
+        # Calculate the entropy of the current distribution
+        self.config.old_entropy = cal_dist_entropy(self.config.dist)
 
+        # Aggregate weights
+        updated_weights = fed_average_nn_parameters(self.previous_weights, client_weights, train_datasizes, self.config.server_lr)
+
+        # Store the weights for the next round
+        self.previous_weights = updated_weights
+
+        # Update server learning rate
+        self.config.server_lr = pow(self.config.server_gamma, self.comm_round)
+
+        # Update distributions
+        self.config.dist, self.max_grads = update_dist(self.config.dist, self.config.configs, chosen_configs, losses, test_datasizes, self.max_grads, self.dist_lr_type)
+        # print(f"Updated distribution: {self.config.dist}")
+
+        # Calculate the entropy of the updated distribution
+        self.config.entropy = cal_dist_entropy(self.config.dist)
+        self.entropies.append(self.config.entropy)
+        print(f"Entropies: {self.entropies}")
+
+        # Send weights to the clients
         responses = []
         for client in self.clients:
             responses.append(
-                (client, _remote_method_async(Client.update_nn_parameters, client.ref, new_params=updated_model)))
+                (client, _remote_method_async(Client.update_nn_parameters, client.ref, new_params=updated_weights)))
 
         for res in responses:
             res[1].wait()
-        logging.info('Weights are updated')
+        # logging.info('Weights are updated')
+
+        # Send distribution to the clients
+        responses = []
+        for client in self.clients:
+            responses.append(
+                (client, _remote_method_async(Client.update_client_dist, client.ref, new_dist=self.config.dist)))
+
+        for res in responses:
+            res[1].wait()
+        # logging.info('Distribution is updated')
 
     def update_client_data_sizes(self):
         responses = []
@@ -191,6 +250,23 @@ class Federator:
     def ensure_path_exists(self, path):
         Path(path).mkdir(parents=True, exist_ok=True)
 
+    def save_entropies(self):
+        file_output = f'./{self.config.output_location}'
+        self.ensure_path_exists(file_output)
+        filename= f'{file_output}/{len(self.clients)}c_{self.epoch_counter}e_{self.dist_lr_type}_entropies.csv'
+        logging.info(f'Saving data at {filename}')
+        with open(filename, "w") as f:
+            for entropy in self.entropies:
+                f.write(f'{entropy}\n')
+
+    def save_time(self, total_time):
+        file_output = f'./{self.config.output_location}'
+        self.ensure_path_exists(file_output)
+        filename= f'{file_output}/{len(self.clients)}c_{self.epoch_counter}e_{self.dist_lr_type}_time.csv'
+        logging.info(f'Saving data at {filename}')
+        with open(filename, "w") as f:
+                f.write(f'{total_time}\n')
+                
     def run(self):
         """
         Main loop of the Federator
@@ -206,14 +282,25 @@ class Federator:
         addition = 0
         epoch_to_run = self.config.epochs
         epoch_size = self.config.epochs_per_cycle
+        start = time.time()
         for epoch in range(epoch_to_run):
-            print(f'Running epoch {epoch}')
-            self.remote_run_epoch(epoch_size)
-            addition += 1
+            # If the distribution entropy > threshold, execute remote_run_epoch 
+            if (self.config.entropy > self.config.entropy_threshold):
+                print(f'Running epoch {epoch}')
+                self.remote_run_epoch(epoch_size)
+                addition += 1
+            else:
+                break
+        end = time.time()
+        total_time = (end - start)*1000
+        logging.info('Saving total time')
+        self.save_time(total_time)
+
         logging.info('Printing client data')
         print(self.client_data)
 
         logging.info(f'Saving data')
         self.save_epoch_data()
+        self.save_entropies()
         logging.info(f'Federator is stopping')
 
