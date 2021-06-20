@@ -1,19 +1,19 @@
 ---
 # Experiment configuration
-total_epochs: 2
-epochs_per_cycle: 1
+total_epochs: 200 # Here epoch means communication round
+epochs_per_cycle: 1 # Here cycle means communication round, and epoch means local update
 wait_for_clients: true
-net: Cifar10CNN
-dataset: cifar10
+net: FashionMNISTCNN
+dataset: fashion_mnist
 # Use cuda is available; setting to false will force CPU
-cuda: true
+cuda: false
 experiment_prefix: 'experiment_multi_machine'
 output_location: 'output'
 tensor_board_active: true
-clients_per_round: 1
+clients_per_round: 8
 system:
   federator:
-    hostname: '172.24.225.208'
+    hostname: '172.26.130.106'
     nic: 'eth0'
   clients:
-    amount: 1
+    amount: 12

@@ -11,7 +11,14 @@ class DistCIFAR10Dataset(DistDataset):
         super(DistCIFAR10Dataset, self).__init__(args)
         self.init_train_dataset()
         self.init_test_dataset()
+        
+    # Change training data batch size
+    def get_train_loader(self, bs):
+        return DataLoader(self.train_dataset, batch_size=bs, sampler=self.train_sampler)
 
+    # Set testing data batch size equal to training data batch size
+    def get_test_loader(self, bs):
+        return DataLoader(self.test_dataset, batch_size=bs, sampler=self.test_sampler)
 
     def init_train_dataset(self):
         dist_loader_text = "distributed" if self.args.get_distributed() else ""

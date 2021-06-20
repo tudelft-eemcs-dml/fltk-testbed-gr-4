@@ -13,10 +13,12 @@ import numpy as np
 from sklearn.metrics import confusion_matrix
 from sklearn.metrics import classification_report
 
-from fltk.datasets.distributed import DistCIFAR10Dataset
+# from fltk.datasets.distributed import DistCIFAR10Dataset
+from fltk.datasets.distributed import DistFashionMNISTDataset
 from fltk.schedulers import MinCapableStepLR
 from fltk.util.arguments import Arguments
 from fltk.util.log import FLLogger
+from fltk.util.choose_config import choose_from_dist
 
 import yaml
 
@@ -70,6 +72,8 @@ class Client:
                                           self.args.get_scheduler_step_size(),
                                           self.args.get_scheduler_gamma(),
                                           self.args.get_min_lr())
+        self.args.get_logger().debug("Configurations: {}".format(self.args.configs))
+        self.args.get_logger().debug("Distribution: {}".format(self.args.dist))
 
     def init_device(self):
         if self.args.cuda and torch.cuda.is_available():
@@ -105,7 +109,7 @@ class Client:
         self.args.distributed = True
         self.args.rank = self.rank
         self.args.world_size = self.world_size
-        self.dataset = DistCIFAR10Dataset(self.args)
+        self.dataset = DistFashionMNISTDataset(self.args)
         self.finished_init = True
         logging.info('Done with init')
 
@@ -202,8 +206,8 @@ class Client:
         final_running_loss = 0.0
         if self.args.distributed:
             self.dataset.train_sampler.set_epoch(epoch)
-
-        for i, (inputs, labels) in enumerate(self.dataset.get_train_loader(), 0):
+            
+        for i, (inputs, labels) in enumerate(self.dataset.get_train_loader(self.args.batch_size), 0):
             inputs, labels = inputs.to(self.device), labels.to(self.device)
 
             # zero the parameter gradients
@@ -239,7 +243,7 @@ class Client:
         pred_ = []
         loss = 0.0
         with torch.no_grad():
-            for (images, labels) in self.dataset.get_test_loader():
+            for (images, labels) in self.dataset.get_test_loader(16):
                 images, labels = images.to(self.device), labels.to(self.device)
 
                 outputs = self.net(images)
@@ -270,6 +274,8 @@ class Client:
     def run_epochs(self, num_epoch):
         start_time_train = datetime.datetime.now()
         loss = weights = None
+        chosen_config_index = self.set_hyperparameters()
+        test_datasize = 16 # Testing data batch size equals training data batch size
         for e in range(num_epoch):
             loss, weights = self.train(self.epoch_counter)
             self.epoch_counter += 1
@@ -281,7 +287,8 @@ class Client:
         elapsed_time_test = datetime.datetime.now() - start_time_test
         test_time_ms = int(elapsed_time_test.total_seconds()*1000)
 
-        data = EpochData(self.epoch_counter, train_time_ms, test_time_ms, loss, accuracy, test_loss, class_precision, class_recall, client_id=self.id)
+        data = EpochData(self.epoch_counter, train_time_ms, test_time_ms, loss, accuracy, test_loss, class_precision, class_recall, self.args.batch_size, test_datasize, self.args.dist, chosen_config_index, client_id=self.id)
+        # data = EpochData(self.epoch_counter, train_time_ms, test_time_ms, loss, accuracy, test_loss, class_precision, class_recall, self.args.batch_size, test_datasize, chosen_config_index, client_id=self.id)
         self.epoch_results.append(data)
 
         # Copy GPU tensors to CPU
@@ -316,10 +323,28 @@ class Client:
     def get_client_datasize(self):
         return len(self.dataset.get_train_sampler())
 
+    def get_client_test_datasize(self):
+        return len(self.dataset.get_test_sampler())
+
     def __del__(self):
         print(f'Client {self.id} is stopping')
 
-    # Sample configuration
-    def sample_config(dist, batch_sizes):
-        
-        return batch_size
+    def update_client_dist(self, new_dist):
+        for i in range(len(new_dist)):
+            self.args.dist[i] = new_dist[i]
+        self.remote_log(f'Distribution of the configurations is updated')
+
+    def set_hyperparameters(self):
+        counter = choose_from_dist(self.args.dist, self.args.configs)
+        cc = self.args.configs[counter]
+        self.args.currentconfig = cc
+        self.args.get_logger().debug("Current configuration: {}".format(str(cc)))
+        self.args.batch_size = cc[0]
+        self.args.lr = cc[1]
+        self.optimizer.param_groups[0]['lr'] = self.args.lr
+        self.args.momentum = cc[2]
+        self.optimizer.param_groups[0]['momentum'] = self.args.momentum
+        self.args.dropouts = cc[3]
+        self.net.layer1._modules['drop'].p = cc[3]
+        self.net.layer2._modules['drop'].p = cc[3]
+        return counter

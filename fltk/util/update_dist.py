@@ -1,48 +1,65 @@
+'''Update the distribution of configurations and calculate the entropy'''
+
 import math
 
 
-# Inputs: 1. dist, the distribution of configurations
-# 2. configs, the possible configurations
-# 3. chosen_configs, the configurations chosen by clients in one epoch
-# 4. losses: loss sent by each client
-# 5. size of the validation set of each client
-def update_dist(dist, configs, chosen_configs, losses, V):
-    new_dist = []
-    for p in dist:
-        new_dist.append(p)
-    learning_rate = math.sqrt(2*math.log10(len(configs))) # Learning rate for the distribution
-    factor = 0.005    # A multiplying factor to reduce the variance of grads
+def update_dist(dist, configs, chosen_configs, losses, V, max_grads, dist_lr_type):
+    # 1. dist:distribution of configurations
+    # 2. configs: possible configurations
+    # 3. chosen_configs: configurations chosen by clients in one communication round
+    # 4. losses: loss sent by each client
+    # 5. V: size of the validation data for each client
+    # 6. max_grads: maximum gradients w.r.t. the probability of configurations in the former rounds
+    # 7. dist_lr_type: type of learning rate for the distribution of configurations
+    
+    new_dist = [p for p in dist]
+    sum_v = sum(V)
+    sum_loss = sum(losses) 
+    lambda_t = sum_loss/sum_v # A baseline to reduce the variance of the gradients 
+
+    # Calculate gradient and obtain the maximum gradient
     grads = [0]*len(configs)
-
-    # Calculate the sum of the length of the validation set
-    sum_v = 0
-    for v in V:
-        sum_v += v
-
-    # Calculate gradient
     for j in range(len(configs)):
         for i in range(len(chosen_configs)):
             if chosen_configs[i] == configs[j]:
-                grads[j] += factor*losses[i]*V[i]/(dist[j]*sum_v)
+                grads[j] += (losses[i]-lambda_t)*V[i] / (dist[j]*sum_v)
+    max_grad = max(grads)
+    max_grads.append(max_grad)
+
+    # Calculate the learning rate of the probabilities
+    if (dist_lr_type == "constant"):
+        dist_lr = math.sqrt(2*math.log10(len(configs)))/400
+    elif (dist_lr_type == "adaptive"):
+        dist_lr = math.sqrt(2*math.log10(len(configs)))/math.sqrt(sum([grad**2 for grad in max_grads]))
+    elif (dist_lr_type == "aggressive"):
+        dist_lr = math.sqrt(2*math.log10(len(configs)))/max_grad
 
     # Update distribution
-    sum_p = 0
     for j in range(len(dist)):
-        new_dist[j] *= math.exp(-learning_rate*grads[j])
-        sum_p += new_dist[j]
+        new_dist[j] *= math.exp(-dist_lr*grads[j])
 
     # Normalization
-    for j in range(len(dist)):
-        new_dist[j] = new_dist[j]/sum_p
-    return new_dist
+    sum_p = sum(new_dist)
+    new_dist = [p/sum_p for p in new_dist]
+    return new_dist, max_grads
+
+def cal_dist_entropy(dist):
+    entropy = 0.0
+    for i in range(len(dist)):
+        entropy += -1*dist[i]*math.log(dist[i])
+    return entropy
 
 
 if __name__ == "__main__":
     dist = [0.2, 0.2, 0.2, 0.2, 0.2]
     configs = [10, 16, 32, 64, 128]
-    chosen_configs = [10, 128, 64, 32, 16]
-    losses = [600, 200, 350, 400, 500]
+    chosen_configs = [10, 128, 64, 64, 16]
+    losses = [90, 100, 85, 79, 60]
     V = [10, 10, 10, 10, 10]
-    new_dist = update_dist(dist, configs, chosen_configs, losses, V)
-    print(f"dist: {dist}")
-    print(f"New dist: {new_dist}")
+    max_grads = [100]
+    dist_lr_type = 'constant'
+    new_dist, max_grads = update_dist(dist, configs, chosen_configs, losses, V, max_grads, dist_lr_type)
+    print(new_dist)
+    entropy = cal_dist_entropy(new_dist)
+
+
